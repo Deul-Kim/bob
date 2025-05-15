@@ -1,0 +1,111 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
+import pandas as pd
+import os
+import time
+
+# Settings
+max_pages = 12940
+csv_filename = "safaribookings_reviews.csv"
+
+# Load existing CSV file (resume from where left off)
+if os.path.exists(csv_filename):
+    existing_df = pd.read_csv(csv_filename)
+    all_reviews = existing_df.to_dict('records')
+    start_page = (len(existing_df) // 10) + 1  # Assuming 10 reviews per page
+    print(f"Resuming from page {start_page} (Total reviews so far: {len(all_reviews)})")
+else:
+    all_reviews = []
+    start_page = 1
+    print(f"Starting from scratch at page {start_page}")
+
+# Selenium configuration
+options = Options()
+options.add_argument("--headless")
+options.add_argument("--disable-gpu")
+driver = webdriver.Chrome(options=options)
+
+start_time = time.time()
+
+for page_num in range(start_page, max_pages + 1):
+    if page_num == 1:
+        url = "https://www.safaribookings.com/reviews"
+    else:
+        url = f"https://www.safaribookings.com/reviews/page/{page_num}"
+
+    print(f"\nProcessing page {page_num}: {url}")
+    loop_start = time.time()
+
+    try:
+        driver.get(url)
+        time.sleep(2)
+
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        people = soup.find_all("div", class_="review__person")
+        print(f"Number of reviews found: {len(people)}")
+
+        if len(people) == 0:
+            print("No more reviews found. Stopping.")
+            break
+
+        page_reviews = []
+
+        for person in people:
+            try:
+                name = person.find("strong", class_="review__person__name").text.strip()
+                country = person.find("div", class_="country-with-flag").get_text(strip=True)
+                visited = person.find("span", class_="review__person__when").text.replace("Visited:", "").strip()
+                reviewed = person.find("span", class_="review__person__reviewed").text.replace("Reviewed:", "").strip()
+
+                p_tag = person.find("p")
+                spans = p_tag.find_all("span")
+                age = spans[0].text.strip() if len(spans) > 0 else ""
+                experience = spans[1].text.strip() if len(spans) > 1 else ""
+
+                review_body = person.find_next_sibling("div", class_="review__body")
+                safari = review_body.find("div", class_="review-about").get_text(strip=True).replace("About:", "").strip()
+                title = review_body.find("h5").text.strip()
+                rating = review_body.find("span", class_="review-score").text.strip().split("/")[0]
+                body = review_body.find_all("p")[-1].text.strip()
+
+                page_reviews.append({
+                    "name": name,
+                    "country": country,
+                    "visited": visited,
+                    "reviewed": reviewed,
+                    "age": age,
+                    "experience": experience,
+                    "safari": safari,
+                    "title": title,
+                    "rating": rating,
+                    "body": body
+                })
+
+            except Exception as e:
+                print("Error while parsing individual review:", e)
+
+        # Append and save
+        all_reviews.extend(page_reviews)
+        df = pd.DataFrame(all_reviews)
+        df.to_csv(csv_filename, index=False, encoding='utf-8-sig')
+        print(f"Total reviews saved so far: {len(all_reviews)}")
+
+        # Time estimation
+        loop_end = time.time()
+        loop_duration = loop_end - loop_start
+        elapsed_total = loop_end - start_time
+        avg_per_page = elapsed_total / (page_num - start_page + 1)
+        remaining_pages = max_pages - page_num
+        est_remaining = avg_per_page * remaining_pages
+
+        print(f"Time for this page: {loop_duration:.2f} seconds | Average per page: {avg_per_page:.2f} seconds")
+        print(f"Estimated time remaining: {est_remaining/60:.1f} minutes ({est_remaining/3600:.2f} hours)")
+
+    except Exception as e:
+        print(f"Error processing page {page_num}: {e}")
+        continue
+
+driver.quit()
+print("\nCrawling completed.")
+print(f"Final data saved to: {csv_filename}")
